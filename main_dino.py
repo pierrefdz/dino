@@ -114,6 +114,9 @@ def get_args_parser():
         help="""Scale range of the cropped image before resizing, relatively to the origin image.
         Used for small local view cropping of multi-crop.""")
 
+    # Rotation augmentation parameters
+    parser.add_argument('--degrees', type=int, default=0)
+
     # Misc
     parser.add_argument('--data_path', default='/path/to/imagenet/train/', type=str,
         help='Please specify path to the ImageNet training data.')
@@ -139,6 +142,7 @@ def train_dino(args):
         args.global_crops_scale,
         args.local_crops_scale,
         args.local_crops_number,
+        args.degrees
     )
     dataset = datasets.ImageFolder(args.data_path, transform=transform)
     sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
@@ -352,6 +356,29 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, data_loade
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
+class GlobalOrthogonalRegularizer():
+    def __init__(self, la=0.1):
+        self.la = la
+
+    def __call__(self, inputs_col, targets_col, inputs_row, target_row):
+        n = inputs_col.size(0)
+        d = inputs_col.size(1)
+        # Compute similarity matrix
+        sim_mat = torch.matmul(inputs_col, inputs_row.t())
+
+        m1 = list()
+        m2 = list()
+        for i in range(n):
+            neg_pair_ = torch.masked_select(sim_mat[i], targets_col[i] != target_row)
+            m1.extend(neg_pair_)
+            m2.extend(neg_pair_ ** 2)
+
+        m1 = torch.stack(m1)
+        m2 = torch.stack(m2)
+        gor = (m1.mean() ** 2) + torch.clip(m2.mean() - (1 / d), min=0)
+        return self.la * gor
+
+
 class DINOLoss(nn.Module):
     def __init__(self, out_dim, ncrops, warmup_teacher_temp, teacher_temp,
                  warmup_teacher_temp_epochs, nepochs, student_temp=0.1,
@@ -409,7 +436,9 @@ class DINOLoss(nn.Module):
 
 
 class DataAugmentationDINO(object):
-    def __init__(self, global_crops_scale, local_crops_scale, local_crops_number):
+    def __init__(self, global_crops_scale, local_crops_scale, local_crops_number, degrees):
+        rotation = transforms.RandomRotation(degrees=degrees, interpolation=Image.BICUBIC)
+        smaller_rotation = transforms.RandomRotation(degrees=degrees/2, interpolation=Image.BICUBIC)
         flip_and_color_jitter = transforms.Compose([
             transforms.RandomHorizontalFlip(p=0.5),
             transforms.RandomApply(
@@ -428,6 +457,7 @@ class DataAugmentationDINO(object):
             transforms.RandomResizedCrop(224, scale=global_crops_scale, interpolation=Image.BICUBIC),
             flip_and_color_jitter,
             utils.GaussianBlur(1.0),
+            rotation,
             normalize,
         ])
         # second global crop
@@ -436,6 +466,7 @@ class DataAugmentationDINO(object):
             flip_and_color_jitter,
             utils.GaussianBlur(0.1),
             utils.Solarization(0.2),
+            rotation,
             normalize,
         ])
         # transformation for the local small crops
@@ -444,6 +475,7 @@ class DataAugmentationDINO(object):
             transforms.RandomResizedCrop(96, scale=local_crops_scale, interpolation=Image.BICUBIC),
             flip_and_color_jitter,
             utils.GaussianBlur(p=0.5),
+            smaller_rotation,
             normalize,
         ])
 
