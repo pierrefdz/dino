@@ -124,9 +124,16 @@ def get_args_parser():
     parser.add_argument('--saveckp_freq', default=20, type=int, help='Save checkpoint every x epochs.')
     parser.add_argument('--seed', default=0, type=int, help='Random seed.')
     parser.add_argument('--num_workers', default=10, type=int, help='Number of data loading workers per GPU.')
-    parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
-        distributed training; see https://pytorch.org/docs/stable/distributed.html""")
-    parser.add_argument("--local_rank", default=0, type=int, help="Please ignore and do not set this argument.")
+    # parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
+    #     distributed training; see https://pytorch.org/docs/stable/distributed.html""")
+    # parser.add_argument("--local_rank", default=0, type=int, help="Please ignore and do not set this argument.")
+
+    # Distributed training parameters
+    parser.add_argument('--debug_slurm', action='store_true')
+    parser.add_argument('--local_rank', default=-1, type=int)
+    parser.add_argument('--master_port', default=-1, type=int)
+    parser.add_argument('--dist-eval', action='store_true', default=False, help='Enabling distributed evaluation')
+
     return parser
 
 
@@ -194,12 +201,12 @@ def train_dino(args):
         teacher = nn.SyncBatchNorm.convert_sync_batchnorm(teacher)
 
         # we need DDP wrapper to have synchro batch norms working...
-        teacher = nn.parallel.DistributedDataParallel(teacher, device_ids=[args.gpu])
+        teacher = nn.parallel.DistributedDataParallel(teacher, device_ids=[args.local_rank])
         teacher_without_ddp = teacher.module
     else:
         # teacher_without_ddp and teacher are the same thing
         teacher_without_ddp = teacher
-    student = nn.parallel.DistributedDataParallel(student, device_ids=[args.gpu])
+    student = nn.parallel.DistributedDataParallel(student, device_ids=[args.local_rank])
     # teacher and student start with the same weights
     teacher_without_ddp.load_state_dict(student.module.state_dict())
     # there is no backpropagation through the teacher, so no need for gradients
@@ -309,6 +316,7 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, data_loade
 
         # move images to gpu
         images = [im.cuda(non_blocking=True) for im in images]
+
         # teacher and student forward passes + compute dino loss
         with torch.cuda.amp.autocast(fp16_scaler is not None):
             teacher_output = teacher(images[:2])  # only the 2 global views pass through the teacher
