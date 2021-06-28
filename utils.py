@@ -520,7 +520,8 @@ def init_distributed_mode(params):
         # define master address and master port
         hostnames = subprocess.check_output(['scontrol', 'show', 'hostnames', os.environ['SLURM_JOB_NODELIST']])
         params.master_addr = hostnames.split()[0].decode('utf-8')
-        params.master_port = '19500'
+        if params.master_port==-1:
+            params.master_port = '19500'
         assert 10001 <= params.master_port <= 20000 or params.world_size == 1
         print(PREFIX + "Master address: %s" % params.master_addr)
         print(PREFIX + "Master port   : %i" % params.master_port)
@@ -586,10 +587,6 @@ def init_distributed_mode(params):
     print(PREFIX + "Multi-GPU      : %s" % str(params.distributed))
     print(PREFIX + "Hostname       : %s" % socket.gethostname())
 
-    # set GPU device
-    torch.cuda.set_device(params.local_rank)
-    setup_for_distributed(params.local_rank == 0)
-
     # initialize multi-GPU
     if params.distributed:
 
@@ -605,6 +602,11 @@ def init_distributed_mode(params):
             init_method='env://',
             backend='nccl',
         )
+
+    # set GPU device
+    torch.cuda.set_device(params.local_rank)
+    dist.barrier()
+    setup_for_distributed(params.is_master)
 
 def accuracy(output, target, topk=(1,)):
     """Computes the accuracy over the k top predictions for the specified values of k"""
