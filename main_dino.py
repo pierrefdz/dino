@@ -101,6 +101,7 @@ def get_args_parser():
         end of optimization. We use a cosine LR schedule with linear warmup.""")
     parser.add_argument('--optimizer', default='adamw', type=str,
         choices=['adamw', 'sgd', 'lars'], help="""Type of optimizer. We recommend using adamw with ViTs.""")
+    parser.add_argument('--lambda_gor', type=float, default=1e-3)
 
     # Multi-crop parameters
     parser.add_argument('--global_crops_scale', type=float, nargs='+', default=(0.4, 1.),
@@ -223,6 +224,9 @@ def train_dino(args):
         args.warmup_teacher_temp_epochs,
         args.epochs,
     ).cuda()
+    gor_loss = GORLoss(
+        args.lambda_gor
+    ).cuda()
 
     # ============ preparing optimizer ... ============
     params_groups = utils.get_params_groups(student)
@@ -273,7 +277,7 @@ def train_dino(args):
         data_loader.sampler.set_epoch(epoch)
 
         # ============ training one epoch of DINO ... ============
-        train_stats = train_one_epoch(student, teacher, teacher_without_ddp, dino_loss,
+        train_stats = train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, gor_loss,
             data_loader, optimizer, lr_schedule, wd_schedule, momentum_schedule,
             epoch, fp16_scaler, args)
 
@@ -291,8 +295,7 @@ def train_dino(args):
         utils.save_on_master(save_dict, os.path.join(args.output_dir, 'checkpoint.pth'))
         if args.saveckp_freq and epoch % args.saveckp_freq == 0:
             utils.save_on_master(save_dict, os.path.join(args.output_dir, f'checkpoint{epoch:04}.pth'))
-        log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                     'epoch': epoch}
+        log_stats = {**{f'train_{k}': v for k, v in train_stats.items()}, 'epoch': epoch}
         if utils.is_main_process():
             with (Path(args.output_dir) / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
@@ -301,7 +304,7 @@ def train_dino(args):
     print('Training time {}'.format(total_time_str))
 
 
-def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, data_loader,
+def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, gor_loss, data_loader,
                     optimizer, lr_schedule, wd_schedule, momentum_schedule,epoch,
                     fp16_scaler, args):
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -319,9 +322,21 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, data_loade
 
         # teacher and student forward passes + compute dino loss
         with torch.cuda.amp.autocast(fp16_scaler is not None):
-            teacher_output = teacher(images[:2])  # only the 2 global views pass through the teacher
-            student_output = student(images)
-            loss = dino_loss(student_output, teacher_output, epoch)
+            print('----- New loop -----')
+            print(torch.cuda.memory_allocated())
+            teacher_output = teacher(images[:2])  # only the 2 global views pass through the teacher, # 2*BxCxWxH -> 2*BxD
+            student_output = student(images) # K*BxCxWxH -> K*BxD
+            loss1 = dino_loss(student_output, teacher_output, epoch) 
+            print('after l1: ',torch.cuda.memory_allocated()/2024/2024)
+            B, D = teacher_output.shape
+            B = B//2
+            ncrops = dino_loss.ncrops
+            targets_student = torch.arange(0,B).expand(ncrops,B).reshape(-1).cuda(non_blocking=True).detach()
+            # targets_student = torch.arange(0,B).expand(2,B).reshape(-1).cuda(non_blocking=True).detach()
+            targets_teacher = torch.arange(0,B).expand(2,B).reshape(-1).cuda(non_blocking=True).detach()
+            loss2 = gor_loss(student_output, targets_student, teacher_output.detach(), targets_teacher)
+            print('after l2: ',torch.cuda.memory_allocated()/2024/2024)
+            loss = loss1 + loss2
 
         if not math.isfinite(loss.item()):
             print("Loss is {}, stopping training".format(loss.item()), force=True)
@@ -334,16 +349,14 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, data_loade
             loss.backward()
             if args.clip_grad:
                 param_norms = utils.clip_gradients(student, args.clip_grad)
-            utils.cancel_gradients_last_layer(epoch, student,
-                                              args.freeze_last_layer)
+            utils.cancel_gradients_last_layer(epoch, student, args.freeze_last_layer)
             optimizer.step()
         else:
             fp16_scaler.scale(loss).backward()
             if args.clip_grad:
                 fp16_scaler.unscale_(optimizer)  # unscale the gradients of optimizer's assigned params in-place
                 param_norms = utils.clip_gradients(student, args.clip_grad)
-            utils.cancel_gradients_last_layer(epoch, student,
-                                              args.freeze_last_layer)
+            utils.cancel_gradients_last_layer(epoch, student, args.freeze_last_layer)
             fp16_scaler.step(optimizer)
             fp16_scaler.update()
 
@@ -356,6 +369,7 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, data_loade
         # logging
         torch.cuda.synchronize()
         metric_logger.update(loss=loss.item())
+        metric_logger.update(loss_gor=loss2.item())
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
         metric_logger.update(wd=optimizer.param_groups[0]["weight_decay"])
     # gather the stats from all processes
@@ -364,20 +378,30 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, data_loade
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
-class GlobalOrthogonalRegularizer():
+class GORLoss(nn.Module):
+    """ Global Orthogonal Regularizer loss from Zhang et al. - 2017 - Learning Spread-Out Local Feature Descriptors """
+
     def __init__(self, la=0.1):
+        super().__init__()
         self.la = la
 
-    def __call__(self, inputs_col, targets_col, inputs_row, target_row):
+    def forward(self, inputs_col, targets_col, inputs_row, targets_row):
+        """ 
+        Args:
+            inputs_col (NxD)
+            targets_col (N)
+            inputs_row (KxD)
+            targets_row (K)
+        """
         n = inputs_col.size(0)
         d = inputs_col.size(1)
         # Compute similarity matrix
-        sim_mat = torch.matmul(inputs_col, inputs_row.t())
+        sim_mat = torch.matmul(inputs_col, inputs_row.t()) # NxD @ DxK -> NxK
 
         m1 = list()
         m2 = list()
         for i in range(n):
-            neg_pair_ = torch.masked_select(sim_mat[i], targets_col[i] != target_row)
+            neg_pair_ = torch.masked_select(sim_mat[i], targets_col[i] != targets_row) # K -> n_neg_pair 
             m1.extend(neg_pair_)
             m2.extend(neg_pair_ ** 2)
 
@@ -409,12 +433,12 @@ class DINOLoss(nn.Module):
         Cross-entropy between softmax outputs of the teacher and student networks.
         """
         student_out = student_output / self.student_temp
-        student_out = student_out.chunk(self.ncrops)
+        student_out = student_out.chunk(self.ncrops) # (1xBxD, ..., 1xBxD)
 
         # teacher centering and sharpening
         temp = self.teacher_temp_schedule[epoch]
         teacher_out = F.softmax((teacher_output - self.center) / temp, dim=-1)
-        teacher_out = teacher_out.detach().chunk(2)
+        teacher_out = teacher_out.detach().chunk(2) # (1xBxD, 1xBxD)
 
         total_loss = 0
         n_loss_terms = 0
@@ -445,8 +469,8 @@ class DINOLoss(nn.Module):
 
 class DataAugmentationDINO(object):
     def __init__(self, global_crops_scale, local_crops_scale, local_crops_number, degrees):
-        rotation = transforms.RandomRotation(degrees=degrees, interpolation=Image.BICUBIC)
-        smaller_rotation = transforms.RandomRotation(degrees=degrees/2, interpolation=Image.BICUBIC)
+        rotation = transforms.RandomRotation(degrees=degrees)
+        smaller_rotation = transforms.RandomRotation(degrees=degrees/2)
         flip_and_color_jitter = transforms.Compose([
             transforms.RandomHorizontalFlip(p=0.5),
             transforms.RandomApply(
@@ -462,7 +486,7 @@ class DataAugmentationDINO(object):
 
         # first global crop
         self.global_transfo1 = transforms.Compose([
-            transforms.RandomResizedCrop(224, scale=global_crops_scale, interpolation=Image.BICUBIC),
+            transforms.RandomResizedCrop(224, scale=global_crops_scale),
             flip_and_color_jitter,
             utils.GaussianBlur(1.0),
             rotation,
@@ -470,7 +494,7 @@ class DataAugmentationDINO(object):
         ])
         # second global crop
         self.global_transfo2 = transforms.Compose([
-            transforms.RandomResizedCrop(224, scale=global_crops_scale, interpolation=Image.BICUBIC),
+            transforms.RandomResizedCrop(224, scale=global_crops_scale),
             flip_and_color_jitter,
             utils.GaussianBlur(0.1),
             utils.Solarization(0.2),
@@ -480,7 +504,7 @@ class DataAugmentationDINO(object):
         # transformation for the local small crops
         self.local_crops_number = local_crops_number
         self.local_transfo = transforms.Compose([
-            transforms.RandomResizedCrop(96, scale=local_crops_scale, interpolation=Image.BICUBIC),
+            transforms.RandomResizedCrop(96, scale=local_crops_scale),
             flip_and_color_jitter,
             utils.GaussianBlur(p=0.5),
             smaller_rotation,
