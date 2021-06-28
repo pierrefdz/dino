@@ -22,6 +22,9 @@ import sys
 import time
 import math
 import random
+import socket
+import argparse
+import warnings
 import datetime
 import subprocess
 from collections import defaultdict, deque
@@ -578,6 +581,7 @@ def init_distributed_mode(params):
 
     # set GPU device
     torch.cuda.set_device(params.local_rank)
+    setup_for_distributed(params.local_rank == 0)
 
     # initialize multi-GPU
     if params.distributed:
