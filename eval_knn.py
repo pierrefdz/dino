@@ -194,10 +194,17 @@ if __name__ == '__main__':
     parser.add_argument('--load_features', default=None, help="""If the features have
         already been computed, where to find them.""")
     parser.add_argument('--num_workers', default=10, type=int, help='Number of data loading workers per GPU.')
-    parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
-        distributed training; see https://pytorch.org/docs/stable/distributed.html""")
-    parser.add_argument("--local_rank", default=0, type=int, help="Please ignore and do not set this argument.")
+    # parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
+    #     distributed training; see https://pytorch.org/docs/stable/distributed.html""")
+    # parser.add_argument("--local_rank", default=0, type=int, help="Please ignore and do not set this argument.")
     parser.add_argument('--data_path', default='/path/to/imagenet/', type=str)
+    
+    # Distributed training parameters
+    parser.add_argument('--debug_slurm', action='store_true')
+    parser.add_argument('--local_rank', default=-1, type=int)
+    parser.add_argument('--master_port', default=-1, type=int)
+    parser.add_argument('--dist-eval', action='store_true', default=False, help='Enabling distributed evaluation')
+
     args = parser.parse_args()
 
     utils.init_distributed_mode(args)
