@@ -194,6 +194,9 @@ def train_dino(args):
         teacher,
         DINOHead(embed_dim, args.out_dim, args.use_bn_in_head),
     )
+    # TODO remove
+    print(student)
+
     # move networks to gpu
     student, teacher = student.cuda(), teacher.cuda()
     # synchronize batch norms (if any)
@@ -324,6 +327,7 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, gor_loss, 
         with torch.cuda.amp.autocast(fp16_scaler is not None):
             teacher_output = teacher(images[:2])  # only the 2 global views pass through the teacher, # 2*BxCxWxH -> 2*BxD
             student_output = student(images) # K*BxCxWxH -> K*BxD
+
             loss1 = dino_loss(student_output, teacher_output, epoch) 
             B, D = teacher_output.shape
             B = B//2
@@ -391,6 +395,8 @@ class GORLoss(nn.Module):
         """
         n = inputs_col.size(0)
         d = inputs_col.size(1)
+        inputs_col = nn.functional.normalize(inputs_col, dim=-1, p=2)
+        inputs_row = nn.functional.normalize(inputs_row, dim=-1, p=2)
         # Compute similarity matrix
         sim_mat = torch.matmul(inputs_col, inputs_row.t()) # NxD @ DxK -> NxK
 
