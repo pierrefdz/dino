@@ -328,10 +328,10 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, gor_loss, 
             B, D = teacher_output.shape
             B = B//2
             ncrops = dino_loss.ncrops
-            targets_student = torch.arange(0,B).expand(ncrops,B).reshape(-1).cuda(non_blocking=True).detach()
-            # targets_student = torch.arange(0,B).expand(2,B).reshape(-1).cuda(non_blocking=True).detach()
+            # targets_student = torch.arange(0,B).expand(ncrops,B).reshape(-1).cuda(non_blocking=True).detach()
+            targets_student = torch.arange(0,B).expand(2,B).reshape(-1).cuda(non_blocking=True).detach()
             targets_teacher = torch.arange(0,B).expand(2,B).reshape(-1).cuda(non_blocking=True).detach()
-            loss2 = gor_loss(student_output, targets_student, teacher_output.detach(), targets_teacher)
+            loss2 = gor_loss(student_output[:2], targets_student, teacher_output.detach(), targets_teacher)
             loss = loss1 + loss2
 
         if not math.isfinite(loss.item()):
