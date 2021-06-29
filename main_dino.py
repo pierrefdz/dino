@@ -329,13 +329,12 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, gor_loss, 
             student_output = student(images) # K*BxCxWxH -> K*BxD
 
             loss1 = dino_loss(student_output, teacher_output, epoch) 
-            B, D = teacher_output.shape
-            B = B//2
+            B = teacher_output.size(0) // 2
             ncrops = dino_loss.ncrops
             # targets_student = torch.arange(0,B).expand(ncrops,B).reshape(-1).cuda(non_blocking=True).detach()
-            targets_student = torch.arange(0,B).expand(2,B).reshape(-1).cuda(non_blocking=True).detach()
+            targets_student = torch.arange(0,B).expand(2,B).reshape(-1).cuda(non_blocking=True).detach() # only the global views in gor loss
             targets_teacher = torch.arange(0,B).expand(2,B).reshape(-1).cuda(non_blocking=True).detach()
-            loss2 = gor_loss(student_output[:2], targets_student, teacher_output.detach(), targets_teacher)
+            loss2 = gor_loss(student_output[0:2*B, :], targets_student, teacher_output.detach(), targets_teacher)
             loss = loss1 + loss2
 
         if not math.isfinite(loss.item()):
@@ -395,6 +394,7 @@ class GORLoss(nn.Module):
         """
         n = inputs_col.size(0)
         d = inputs_col.size(1)
+        k = inputs_row.size(0)
         inputs_col = nn.functional.normalize(inputs_col, dim=-1, p=2)
         inputs_row = nn.functional.normalize(inputs_row, dim=-1, p=2)
         # Compute similarity matrix
@@ -402,13 +402,15 @@ class GORLoss(nn.Module):
 
         m1 = list()
         m2 = list()
-        for i in range(n):
-            neg_pair_ = torch.masked_select(sim_mat[i], targets_col[i] != targets_row) # K -> n_neg_pair 
-            m1.extend(neg_pair_)
-            m2.extend(neg_pair_ ** 2)
+        mask = targets_col.expand(k, n).T != targets_row.expand(n, k) # NxK
+        # for i in range(n):
+        #     neg_pair_ = torch.masked_select(sim_mat[i], targets_col[i] != targets_row) # K -> n_neg_pair 
+        #     m1.extend(neg_pair_)
+        #     m2.extend(neg_pair_ ** 2)
+        neg_pairs = torch.masked_select(sim_mat, mask)
 
-        m1 = torch.stack(m1)
-        m2 = torch.stack(m2)
+        m1 = neg_pairs
+        m2 = neg_pairs**2
         gor = (m1.mean() ** 2) + torch.clip(m2.mean() - (1 / d), min=0)
         return self.la * gor
 
@@ -434,7 +436,7 @@ class DINOLoss(nn.Module):
         """
         Cross-entropy between softmax outputs of the teacher and student networks.
         """
-        student_out = student_output / self.student_temp
+        student_out = student_output / self.student_temp # ncrops*BxD
         student_out = student_out.chunk(self.ncrops) # (1xBxD, ..., 1xBxD)
 
         # teacher centering and sharpening
