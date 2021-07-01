@@ -18,7 +18,7 @@ import torch
 from torch import nn
 import torch.distributed as dist
 import torch.backends.cudnn as cudnn
-from torchvision import datasets
+from torchvision import datasets, models
 from torchvision import transforms as pth_transforms
 
 import utils
@@ -54,7 +54,13 @@ def extract_feature_pipeline(args):
     print(f"Data loaded with {len(dataset_train)} train and {len(dataset_val)} val imgs.")
 
     # ============ building network ... ============
-    model = vits.__dict__[args.arch](patch_size=args.patch_size, num_classes=0)
+    if args.arch in vits.__dict__.keys():
+        model = vits.__dict__[args.arch](patch_size=args.patch_size, num_classes=0)
+    # otherwise, we check if the architecture is in torchvision models
+    elif args.arch in models.__dict__.keys():
+        model = models.__dict__[args.arch]()
+        model.fc = nn.Identity()
+    
     print(f"Model {args.arch} {args.patch_size}x{args.patch_size} built.")
     model.cuda()
     utils.load_pretrained_weights(model, args.pretrained_weights, args.checkpoint_key, args.arch, args.patch_size)
