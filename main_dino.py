@@ -297,7 +297,7 @@ def train_dino(args):
             'teacher': teacher.state_dict(),
             'optimizer': optimizer.state_dict(),
             'epoch': epoch + 1,
-            'args': args,
+            # 'args': args,
             'dino_loss': dino_loss.state_dict(),
         }
         if fp16_scaler is not None:
