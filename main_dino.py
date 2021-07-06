@@ -34,6 +34,8 @@ import utils
 import vision_transformer as vits
 from vision_transformer import DINOHead
 
+from torch.utils.tensorboard import SummaryWriter
+
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
     if name.islower() and not name.startswith("__")
     and callable(torchvision_models.__dict__[name]))
@@ -101,7 +103,7 @@ def get_args_parser():
         end of optimization. We use a cosine LR schedule with linear warmup.""")
     parser.add_argument('--optimizer', default='adamw', type=str,
         choices=['adamw', 'sgd', 'lars'], help="""Type of optimizer. We recommend using adamw with ViTs.""")
-    parser.add_argument('--lambda_gor', type=float, default=1e-3)
+    parser.add_argument('--lambda_regul', type=float, default=1e-3)
 
     # Multi-crop parameters
     parser.add_argument('--global_crops_scale', type=float, nargs='+', default=(0.4, 1.),
@@ -145,6 +147,10 @@ def train_dino(args):
     print("\n".join("%s: %s" % (k, str(v)) for k, v in sorted(dict(vars(args)).items())))
     cudnn.benchmark = True
 
+    if utils.is_main_process():
+        writer = SummaryWriter(os.path.join(args.output_dir, 'tensorboard'))
+        args.writer = writer
+
     # ============ preparing data ... ============
     transform = DataAugmentationDINO(
         args.global_crops_scale,
@@ -184,18 +190,14 @@ def train_dino(args):
         print(f"Unknow architecture: {args.arch}")
 
     # multi-crop wrapper handles forward with inputs of different resolutions
-    student = utils.MultiCropWrapper(student, DINOHead(
-        embed_dim,
-        args.out_dim,
-        use_bn=args.use_bn_in_head,
-        norm_last_layer=args.norm_last_layer,
-    ))
+    student = utils.MultiCropWrapper(
+        student, 
+        DINOHead(embed_dim, args.out_dim, use_bn=args.use_bn_in_head, norm_last_layer=args.norm_last_layer)
+    )
     teacher = utils.MultiCropWrapper(
         teacher,
         DINOHead(embed_dim, args.out_dim, args.use_bn_in_head),
     )
-    # TODO remove
-    print(student)
 
     # move networks to gpu
     student, teacher = student.cuda(), teacher.cuda()
@@ -227,9 +229,14 @@ def train_dino(args):
         args.warmup_teacher_temp_epochs,
         args.epochs,
     ).cuda()
-    gor_loss = GORLoss(
-        args.lambda_gor
+    koleo_loss = KoLeoLoss(
+        args.local_crops_number + 2,  # total number of crops = 2 global crops + local_crops_number
+        args.lambda_regul
     ).cuda()
+    # # TODO: remove this
+    # gor_loss = GORLoss(
+    #     args.lambda_regul
+    # ).cuda()
 
     # ============ preparing optimizer ... ============
     params_groups = utils.get_params_groups(student)
@@ -280,7 +287,7 @@ def train_dino(args):
         data_loader.sampler.set_epoch(epoch)
 
         # ============ training one epoch of DINO ... ============
-        train_stats = train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, gor_loss,
+        train_stats = train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, koleo_loss,
             data_loader, optimizer, lr_schedule, wd_schedule, momentum_schedule,
             epoch, fp16_scaler, args)
 
@@ -300,6 +307,8 @@ def train_dino(args):
             utils.save_on_master(save_dict, os.path.join(args.output_dir, f'checkpoint{epoch:04}.pth'))
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()}, 'epoch': epoch}
         if utils.is_main_process():
+            args.writer.add_scalar('Loss/loss', log_stats['train_loss'], epoch)
+            args.writer.add_scalar('Loss/loss_regul', log_stats['train_loss_regul'], epoch)
             with (Path(args.output_dir) / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
     total_time = time.time() - start_time
@@ -307,7 +316,7 @@ def train_dino(args):
     print('Training time {}'.format(total_time_str))
 
 
-def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, gor_loss, data_loader,
+def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, reg_loss, data_loader,
                     optimizer, lr_schedule, wd_schedule, momentum_schedule,epoch,
                     fp16_scaler, args):
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -325,16 +334,20 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, gor_loss, 
 
         # teacher and student forward passes + compute dino loss
         with torch.cuda.amp.autocast(fp16_scaler is not None):
-            teacher_output = teacher(images[:2])  # only the 2 global views pass through the teacher, # 2*BxCxWxH -> 2*BxD
-            student_output = student(images) # K*BxCxWxH -> K*BxD
+            teacher_output, hooked_teacher_output = teacher(images[:2], hook=True)  # only the 2 global views pass through the teacher, # 2*BxCxWxH -> 2*BxD
+            student_output, hooked_student_output = student(images, hook=True) # K*BxCxWxH -> K*BxD
 
             loss1 = dino_loss(student_output, teacher_output, epoch) 
-            B = teacher_output.size(0) // 2
-            ncrops = dino_loss.ncrops
-            # targets_student = torch.arange(0,B).expand(ncrops,B).reshape(-1).cuda(non_blocking=True).detach()
-            targets_student = torch.arange(0,B).expand(2,B).reshape(-1).cuda(non_blocking=True).detach() # only the global views in gor loss
-            targets_teacher = torch.arange(0,B).expand(2,B).reshape(-1).cuda(non_blocking=True).detach()
-            loss2 = gor_loss(student_output[0:2*B, :], targets_student, teacher_output.detach(), targets_teacher)
+            loss2 = reg_loss(hooked_student_output, hooked_teacher_output)
+
+            # TODO: remove this
+            # B = teacher_output.size(0) // 2
+            # ncrops = dino_loss.ncrops
+            # # targets_student = torch.arange(0,B).expand(ncrops,B).reshape(-1).cuda(non_blocking=True).detach()
+            # targets_student = torch.arange(0,B).expand(2,B).reshape(-1).cuda(non_blocking=True).detach() # only the global views in gor loss
+            # targets_teacher = torch.arange(0,B).expand(2,B).reshape(-1).cuda(non_blocking=True).detach()
+            # loss2 = reg_loss(student_output[0:2*B, :], targets_student, teacher_output.detach(), targets_teacher)
+            
             loss = loss1 + loss2
 
         if not math.isfinite(loss.item()):
@@ -368,13 +381,50 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, gor_loss, 
         # logging
         torch.cuda.synchronize()
         metric_logger.update(loss=loss.item())
-        metric_logger.update(loss_gor=loss2.item())
+        metric_logger.update(loss_regul=loss2.item())
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
         metric_logger.update(wd=optimizer.param_groups[0]["weight_decay"])
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
+
+class KoLeoLoss(nn.Module):
+    """ Kozachenko-Leonenko entropic loss regularizer from Sablayrolles et al. - 2018 - Spreading vectors for similarity search """
+
+    def __init__(self, ncrops, la=0.1):
+        super().__init__()
+        self.la = la
+        self.ncrops = ncrops
+        self.pdist = nn.PairwiseDistance(2)
+    
+    def pairwise_NNs_inner(self, x):
+        """
+        Pairwise nearest neighbors for L2-normalized vectors.
+        Uses Torch rather than Faiss to remain on GPU.
+        """
+        # parwise dot products (= inverse distance)
+        dots = torch.mm(x, x.t())
+        n = x.shape[0]
+        dots.view(-1)[::(n+1)].fill_(-1)  # Trick to fill diagonal with -1
+        _, I = torch.max(dots, dim=1)  # max inner prod -> min distance
+        return I
+
+    def forward(self, student_output, teacher_output):
+        """ 
+        Args:
+            student_output (ncrops*BxD): backbone output of student 
+            teacher_output (2*BxD): backbone output of teacher 
+        """
+        student_output = student_output.chunk(self.ncrops)[0] # (1xBxD, ..., 1xBxD) -> 1xBxD
+        student_output = student_output / student_output.norm(dim=-1, keepdim=True)
+        student_output = student_output.squeeze() # 1xBxD-> BxD 
+        # teacher_output = teacher_output / teacher_output.norm(dim=-1, keepdim=True)
+        I = self.pairwise_NNs_inner(student_output)
+        distances = self.pdist(student_output, student_output[I]) # BxD, BxD -> B
+        loss = - torch.log(student_output.size(0) * distances).mean()
+        return self.la * loss
 
 
 class GORLoss(nn.Module):
