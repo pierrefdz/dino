@@ -103,6 +103,9 @@ def get_args_parser():
         end of optimization. We use a cosine LR schedule with linear warmup.""")
     parser.add_argument('--optimizer', default='adamw', type=str,
         choices=['adamw', 'sgd', 'lars'], help="""Type of optimizer. We recommend using adamw with ViTs.""")
+
+    # Regularization loss
+    parser.add_argument('--regul', type=str, default="koleo", choices=["koleo", "gor"])
     parser.add_argument('--lambda_regul', type=float, default=1e-3)
 
     # Multi-crop parameters
@@ -229,14 +232,14 @@ def train_dino(args):
         args.warmup_teacher_temp_epochs,
         args.epochs,
     ).cuda()
-    koleo_loss = KoLeoLoss(
-        args.local_crops_number + 2,  # total number of crops = 2 global crops + local_crops_number
-        args.lambda_regul
-    ).cuda()
-    # # TODO: remove this
-    # gor_loss = GORLoss(
-    #     args.lambda_regul
-    # ).cuda()
+    if args.regul=='koleo':
+        reg_loss = KoLeoLoss(
+            args.local_crops_number + 2  # total number of crops = 2 global crops + local_crops_number
+        ).cuda()
+    elif args.regul=='gor':
+        reg_loss = GORLoss(
+            args.local_crops_number + 2  # total number of crops = 2 global crops + local_crops_number
+        ).cuda()
 
     # ============ preparing optimizer ... ============
     params_groups = utils.get_params_groups(student)
@@ -287,7 +290,7 @@ def train_dino(args):
         data_loader.sampler.set_epoch(epoch)
 
         # ============ training one epoch of DINO ... ============
-        train_stats = train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, koleo_loss,
+        train_stats = train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, reg_loss,
             data_loader, optimizer, lr_schedule, wd_schedule, momentum_schedule,
             epoch, fp16_scaler, args)
 
@@ -308,6 +311,7 @@ def train_dino(args):
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()}, 'epoch': epoch}
         if utils.is_main_process():
             args.writer.add_scalar('Loss/loss', log_stats['train_loss'], epoch)
+            args.writer.add_scalar('Loss/loss_dino', log_stats['train_loss_dino'], epoch)
             args.writer.add_scalar('Loss/loss_regul', log_stats['train_loss_regul'], epoch)
             with (Path(args.output_dir) / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
@@ -337,18 +341,11 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, reg_loss, 
             teacher_output, hooked_teacher_output = teacher(images[:2], hook=True)  # only the 2 global views pass through the teacher, # 2*BxCxWxH -> 2*BxD
             student_output, hooked_student_output = student(images, hook=True) # K*BxCxWxH -> K*BxD
 
-            loss1 = dino_loss(student_output, teacher_output, epoch) 
+            loss1 = dino_loss(student_output, teacher_output, epoch)
+            # loss2 = reg_loss(student_output, teacher_output)
             loss2 = reg_loss(hooked_student_output, hooked_teacher_output)
-
-            # TODO: remove this
-            # B = teacher_output.size(0) // 2
-            # ncrops = dino_loss.ncrops
-            # # targets_student = torch.arange(0,B).expand(ncrops,B).reshape(-1).cuda(non_blocking=True).detach()
-            # targets_student = torch.arange(0,B).expand(2,B).reshape(-1).cuda(non_blocking=True).detach() # only the global views in gor loss
-            # targets_teacher = torch.arange(0,B).expand(2,B).reshape(-1).cuda(non_blocking=True).detach()
-            # loss2 = reg_loss(student_output[0:2*B, :], targets_student, teacher_output.detach(), targets_teacher)
             
-            loss = loss1 + loss2
+            loss = loss1 + args.lambda_regul*loss2
 
         if not math.isfinite(loss.item()):
             print("Loss is {}, stopping training".format(loss.item()), force=True)
@@ -381,6 +378,7 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, reg_loss, 
         # logging
         torch.cuda.synchronize()
         metric_logger.update(loss=loss.item())
+        metric_logger.update(loss_dino=loss1.item())
         metric_logger.update(loss_regul=loss2.item())
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
         metric_logger.update(wd=optimizer.param_groups[0]["weight_decay"])
@@ -393,11 +391,10 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, reg_loss, 
 class KoLeoLoss(nn.Module):
     """ Kozachenko-Leonenko entropic loss regularizer from Sablayrolles et al. - 2018 - Spreading vectors for similarity search """
 
-    def __init__(self, ncrops, la=0.1):
+    def __init__(self, ncrops):
         super().__init__()
-        self.la = la
         self.ncrops = ncrops
-        self.pdist = nn.PairwiseDistance(2)
+        self.pdist = nn.PairwiseDistance(2, eps=1e-8)
     
     def pairwise_NNs_inner(self, x):
         """
@@ -411,6 +408,28 @@ class KoLeoLoss(nn.Module):
         _, I = torch.max(dots, dim=1)  # max inner prod -> min distance
         return I
 
+    def forward(self, student_output, teacher_output, eps=1e-8):
+        """ 
+        Args:
+            student_output (ncrops*BxD): backbone output of student 
+            teacher_output (2*BxD): backbone output of teacher 
+        """
+        student_output = student_output.chunk(self.ncrops)[0] # (1xBxD, ..., 1xBxD) -> 1xBxD
+        student_output = F.normalize(student_output, eps=eps, p=2, dim=-1)
+        student_output = student_output.squeeze() # 1xBxD-> BxD 
+        I = self.pairwise_NNs_inner(student_output)
+        distances = self.pdist(student_output, student_output[I]) # BxD, BxD -> B
+        loss = - torch.log(distances + eps).mean()
+        return loss
+
+
+class GORLoss(nn.Module):
+    """ Global Orthogonal Regularizer loss from Zhang et al. - 2017 - Learning Spread-Out Local Feature Descriptors """
+
+    def __init__(self, ncrops):
+        super().__init__()
+        self.ncrops = ncrops
+
     def forward(self, student_output, teacher_output):
         """ 
         Args:
@@ -418,23 +437,17 @@ class KoLeoLoss(nn.Module):
             teacher_output (2*BxD): backbone output of teacher 
         """
         student_output = student_output.chunk(self.ncrops)[0] # (1xBxD, ..., 1xBxD) -> 1xBxD
-        student_output = student_output / student_output.norm(dim=-1, keepdim=True)
+        student_output = F.normalize(student_output, eps=1e-8, p=2)
         student_output = student_output.squeeze() # 1xBxD-> BxD 
-        # teacher_output = teacher_output / teacher_output.norm(dim=-1, keepdim=True)
-        I = self.pairwise_NNs_inner(student_output)
-        distances = self.pdist(student_output, student_output[I]) # BxD, BxD -> B
-        loss = - torch.log(student_output.size(0) * distances).mean()
-        return self.la * loss
+        sim = student_output @ student_output.T # BxD @ DxB -> BxB
+        mask = torch.ones(sim.size()).triu(diagonal=1).cuda() > 0.5
+        neg_pairs = torch.masked_select(sim, mask)
+        m1 = neg_pairs.mean()
+        m2 = (neg_pairs**2).mean()
+        loss = (m1**2) + torch.clip(m2 - (1/student_output.size(-1)), min=0)
+        return loss
 
-
-class GORLoss(nn.Module):
-    """ Global Orthogonal Regularizer loss from Zhang et al. - 2017 - Learning Spread-Out Local Feature Descriptors """
-
-    def __init__(self, la=0.1):
-        super().__init__()
-        self.la = la
-
-    def forward(self, inputs_col, targets_col, inputs_row, targets_row):
+    def forward_prev(self, inputs_col, targets_col, inputs_row, targets_row):
         """ 
         Args:
             inputs_col (NxD)
@@ -445,8 +458,8 @@ class GORLoss(nn.Module):
         n = inputs_col.size(0)
         d = inputs_col.size(1)
         k = inputs_row.size(0)
-        inputs_col = nn.functional.normalize(inputs_col, dim=-1, p=2)
-        inputs_row = nn.functional.normalize(inputs_row, dim=-1, p=2)
+        inputs_col = F.normalize(inputs_col, dim=-1, p=2)
+        inputs_row = F.normalize(inputs_row, dim=-1, p=2)
         # Compute similarity matrix
         sim_mat = torch.matmul(inputs_col, inputs_row.t()) # NxD @ DxK -> NxK
 
