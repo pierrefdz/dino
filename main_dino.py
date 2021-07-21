@@ -105,7 +105,7 @@ def get_args_parser():
         choices=['adamw', 'sgd', 'lars'], help="""Type of optimizer. We recommend using adamw with ViTs.""")
 
     # Regularization loss
-    parser.add_argument('--regul', type=str, default="koleo", choices=["koleo", "gor"])
+    parser.add_argument('--regul', type=str, default=None, choices=["koleo", "gor"])
     parser.add_argument('--lambda_regul', type=float, default=1e-3)
 
     # Multi-crop parameters
@@ -240,6 +240,8 @@ def train_dino(args):
         reg_loss = GORLoss(
             args.local_crops_number + 2  # total number of crops = 2 global crops + local_crops_number
         ).cuda()
+    else:
+        reg_loss = None
 
     # ============ preparing optimizer ... ============
     params_groups = utils.get_params_groups(student)
@@ -311,8 +313,9 @@ def train_dino(args):
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()}, 'epoch': epoch}
         if utils.is_main_process():
             args.writer.add_scalar('Loss/loss', log_stats['train_loss'], epoch)
-            args.writer.add_scalar('Loss/loss_dino', log_stats['train_loss_dino'], epoch)
-            args.writer.add_scalar('Loss/loss_regul', log_stats['train_loss_regul'], epoch)
+            if args.regul is not None:
+                args.writer.add_scalar('Loss/loss_dino', log_stats['train_loss_dino'], epoch)
+                args.writer.add_scalar('Loss/loss_regul', log_stats['train_loss_regul'], epoch)
             with (Path(args.output_dir) / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
     total_time = time.time() - start_time
@@ -338,14 +341,19 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, reg_loss, 
 
         # teacher and student forward passes + compute dino loss
         with torch.cuda.amp.autocast(fp16_scaler is not None):
-            teacher_output, hooked_teacher_output = teacher(images[:2], hook=True)  # only the 2 global views pass through the teacher, # 2*BxCxWxH -> 2*BxD
-            student_output, hooked_student_output = student(images, hook=True) # K*BxCxWxH -> K*BxD
+            if args.regul is not None:
+                teacher_output, hooked_teacher_output = teacher(images[:2], hook=True)  # only the 2 global views pass through the teacher, # 2*BxCxWxH -> 2*BxD
+                student_output, hooked_student_output = student(images, hook=True) # K*BxCxWxH -> K*BxD
 
-            loss1 = dino_loss(student_output, teacher_output, epoch)
-            # loss2 = reg_loss(student_output, teacher_output)
-            loss2 = reg_loss(hooked_student_output, hooked_teacher_output)
-            
-            loss = loss1 + args.lambda_regul*loss2
+                loss1 = dino_loss(student_output, teacher_output, epoch)
+                loss2 = reg_loss(hooked_student_output, hooked_teacher_output)
+                
+                loss = loss1 + args.lambda_regul*loss2
+            else:
+                teacher_output = teacher(images[:2])  # only the 2 global views pass through the teacher, # 2*BxCxWxH -> 2*BxD
+                student_output = student(images) # K*BxCxWxH -> K*BxD
+
+                loss = dino_loss(student_output, teacher_output, epoch)
 
         if not math.isfinite(loss.item()):
             print("Loss is {}, stopping training".format(loss.item()), force=True)
@@ -378,8 +386,9 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, reg_loss, 
         # logging
         torch.cuda.synchronize()
         metric_logger.update(loss=loss.item())
-        metric_logger.update(loss_dino=loss1.item())
-        metric_logger.update(loss_regul=loss2.item())
+        if args.regul is not None:
+            metric_logger.update(loss_dino=loss1.item())
+            metric_logger.update(loss_regul=loss2.item())
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
         metric_logger.update(wd=optimizer.param_groups[0]["weight_decay"])
     # gather the stats from all processes
