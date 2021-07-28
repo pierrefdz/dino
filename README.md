@@ -80,13 +80,68 @@ You can choose to download only the weights of the pretrained backbone used for 
   </tr>
 </table>
 
-The pretrained models are available on PyTorch Hub.
+We also release XCiT models ([[`arXiv`](https://arxiv.org/abs/2106.09681)] [[`code`](https://github.com/facebookresearch/xcit)]) trained with DINO:
+<table>
+  <tr>
+    <th>arch</th>
+    <th>params</th>
+    <th>k-nn</th>
+    <th>linear</th>
+    <th colspan="4">download</th>
+  </tr>
+  <tr>
+    <td>xcit_small_12_p16</td>
+    <td>26M</td>
+    <td>76.0%</td>
+    <td>77.8%</td>
+    <td><a href="https://dl.fbaipublicfiles.com/dino/dino_xcit_small_12_p16_pretrain/dino_xcit_small_12_p16_pretrain.pth">backbone only</a></td>
+    <td><a href="https://dl.fbaipublicfiles.com/dino/dino_xcit_small_12_p16_pretrain/dino_xcit_small_12_p16_pretrain_full_checkpoint.pth">full ckpt</a></td>
+    <td><a href="https://dl.fbaipublicfiles.com/dino/dino_xcit_small_12_p16_pretrain/args.txt">args</a></td>
+    <td><a href="https://dl.fbaipublicfiles.com/dino/dino_xcit_small_12_p16_pretrain/dino_xcit_small_12_p16_pretrain_log.txt">logs</a></td>
+  </tr>
+  <tr>
+    <td>xcit_small_12_p8</td>
+    <td>26M</td>
+    <td>77.1%</td>
+    <td>79.2%</td>
+    <td><a href="https://dl.fbaipublicfiles.com/dino/dino_xcit_small_12_p8_pretrain/dino_xcit_small_12_p8_pretrain.pth">backbone only</a></td>
+    <td><a href="https://dl.fbaipublicfiles.com/dino/dino_xcit_small_12_p8_pretrain/dino_xcit_small_12_p8_pretrain_full_checkpoint.pth">full ckpt</a></td>
+    <td><a href="https://dl.fbaipublicfiles.com/dino/dino_xcit_small_12_p8_pretrain/args.txt">args</a></td>
+    <td><a href="https://dl.fbaipublicfiles.com/dino/dino_xcit_small_12_p8_pretrain/dino_xcit_small_12_p8_pretrain_log.txt">logs</a></td>
+  </tr>
+  <tr>
+    <td>xcit_medium_24_p16</td>
+    <td>84M</td>
+    <td>76.4%</td>
+    <td>78.8%</td>
+    <td><a href="https://dl.fbaipublicfiles.com/dino/dino_xcit_medium_24_p16_pretrain/dino_xcit_medium_24_p16_pretrain.pth">backbone only</a></td>
+    <td><a href="https://dl.fbaipublicfiles.com/dino/dino_xcit_medium_24_p16_pretrain/dino_xcit_medium_24_p16_pretrain_full_checkpoint.pth">full ckpt</a></td>
+    <td><a href="https://dl.fbaipublicfiles.com/dino/dino_xcit_medium_24_p16_pretrain/args.txt">args</a></td>
+    <td><a href="https://dl.fbaipublicfiles.com/dino/dino_xcit_medium_24_p16_pretrain/dino_xcit_medium_24_p16_pretrain_log.txt">logs</a></td>
+  </tr>
+  <tr>
+    <td>xcit_medium_24_p8</td>
+    <td>84M</td>
+    <td>77.9%</td>
+    <td>80.3%</td>
+    <td><a href="https://dl.fbaipublicfiles.com/dino/dino_xcit_medium_24_p8_pretrain/dino_xcit_medium_24_p8_pretrain.pth">backbone only</a></td>
+    <td><a href="https://dl.fbaipublicfiles.com/dino/dino_xcit_medium_24_p8_pretrain/dino_xcit_medium_24_p8_pretrain_full_checkpoint.pth">full ckpt</a></td>
+    <td><a href="https://dl.fbaipublicfiles.com/dino/dino_xcit_medium_24_p8_pretrain/args.txt">args</a></td>
+    <td><a href="https://dl.fbaipublicfiles.com/dino/dino_xcit_medium_24_p8_pretrain/dino_xcit_medium_24_p8_pretrain_log.txt">logs</a></td>
+  </tr>
+</table>
+
+### Pretrained models on PyTorch Hub
 ```python
 import torch
 vits16 = torch.hub.load('facebookresearch/dino:main', 'dino_vits16')
 vits8 = torch.hub.load('facebookresearch/dino:main', 'dino_vits8')
 vitb16 = torch.hub.load('facebookresearch/dino:main', 'dino_vitb16')
 vitb8 = torch.hub.load('facebookresearch/dino:main', 'dino_vitb8')
+xcit_small_12_p16 = torch.hub.load('facebookresearch/dino:main', 'dino_xcit_small_12_p16')
+xcit_small_12_p8 = torch.hub.load('facebookresearch/dino:main', 'dino_xcit_small_12_p8')
+xcit_medium_24_p16 = torch.hub.load('facebookresearch/dino:main', 'dino_xcit_medium_24_p16')
+xcit_medium_24_p8 = torch.hub.load('facebookresearch/dino:main', 'dino_xcit_medium_24_p8')
 resnet50 = torch.hub.load('facebookresearch/dino:main', 'dino_resnet50')
 ```
 
@@ -222,6 +277,33 @@ python eval_video_segmentation.py --data_path $HOME/davis-2017/DAVIS/ --output_d
 git clone https://github.com/davisvideochallenge/davis2017-evaluation $HOME/davis2017-evaluation
 python $HOME/davis2017-evaluation/evaluation_method.py --task semi-supervised --results_path /path/to/saving_dir --davis_path $HOME/davis-2017/DAVIS/
 ```
+
+## Evaluation: Image Retrieval on revisited Oxford and Paris
+Step 1: Prepare revisited Oxford and Paris by following [this repo](https://github.com/filipradenovic/revisitop).
+
+Step 2: Image retrieval (if you do not specify weights with `--pretrained_weights` then by default [DINO weights pretrained on Google Landmark v2 dataset](https://dl.fbaipublicfiles.com/dino/dino_vitsmall16_googlelandmark_pretrain/dino_vitsmall16_googlelandmark_pretrain.pth) will be used).
+
+Paris:
+```
+python -m torch.distributed.launch --use_env --nproc_per_node=1 eval_image_retrieval.py --imsize 512 --multiscale 1 --data_path /path/to/revisited_paris_oxford/ --dataset rparis6k
+```
+
+Oxford:
+```
+python -m torch.distributed.launch --use_env --nproc_per_node=1 eval_image_retrieval.py --imsize 224 --multiscale 0 --data_path /path/to/revisited_paris_oxford/ --dataset roxford5k
+```
+
+## Evaluation: Copy detection on Copydays
+Step 1: Prepare [Copydays dataset](https://lear.inrialpes.fr/~jegou/data.php#copydays).
+
+Step 2 (opt): Prepare a set of image distractors and a set of images on which to learn the whitening operator.
+In our paper, we use 10k random images from YFCC100M as distractors and 20k random images from YFCC100M (different from the distractors) for computing the whitening operation.
+
+Step 3: Run copy detection:
+```
+python -m torch.distributed.launch --use_env --nproc_per_node=1 eval_copy_detection.py --data_path /path/to/copydays/ --whitening_path /path/to/whitening_data/ --distractors_path /path/to/distractors/
+```
+We report result on the strong subset. For example in the stdout from the command above we get: `eval on strong mAP=0.858`.
 
 ## License
 This repository is released under the Apache 2.0 license as found in the [LICENSE](LICENSE) file.
