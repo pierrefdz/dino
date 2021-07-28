@@ -205,25 +205,35 @@ def extract_features(image_list, model, args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Copy detection on Copydays')
-    parser.add_argument('--data_path', default='/path/to/copydays/', type=str,
-        help="See https://lear.inrialpes.fr/~jegou/data.php#copydays")
-    parser.add_argument('--whitening_path', default='/path/to/whitening_data/', type=str,
-        help="""Path to directory with images used for computing the whitening operator.
-        In our paper, we use 20k random images from YFCC100M.""")
-    parser.add_argument('--distractors_path', default='/path/to/distractors/', type=str,
-        help="Path to directory with distractors images. In our paper, we use 10k random images from YFCC100M.")
+    parser.add_argument('--data_path', default='/checkpoint/matthijs/image_copy_detection/hash-data/external/copydays', type=str)
+    parser.add_argument('--whitening_path', default='/checkpoint/mathilde/datasets/flickr_pca/', type=str)
+    parser.add_argument('--distractors_path', default='/checkpoint/mathilde/datasets/flickr_distractors2/', type=str)
+    #parser.add_argument('--data_path', default='/path/to/copydays/', type=str,
+    #    help="See https://lear.inrialpes.fr/~jegou/data.php#copydays")
+    #parser.add_argument('--whitening_path', default='/path/to/whitening_data/', type=str,
+    #    help="""Path to directory with images used for computing the whitening operator.
+    #    In our paper, we use 20k random images from YFCC100M.""")
+    #parser.add_argument('--distractors_path', default='/path/to/distractors/', type=str,
+    #    help="""Path to directory with distractors images.
+    #    In our paper, we use 10k random images from YFCC100M.""")
     parser.add_argument('--imsize', default=320, type=int, help='Image size (square image)')
     parser.add_argument('--batch_size_per_gpu', default=16, type=int, help='Per-GPU batch-size')
     parser.add_argument('--pretrained_weights', default='', type=str, help="Path to pretrained weights to evaluate.")
     parser.add_argument('--use_cuda', default=True, type=utils.bool_flag)
     parser.add_argument('--arch', default='vit_base', type=str, help='Architecture')
-    parser.add_argument('--patch_size', default=8, type=int, help='Patch resolution of the model.')
+    parser.add_argument('--patch_size', default=16, type=int, help='Patch resolution of the model.')
     parser.add_argument("--checkpoint_key", default="teacher", type=str,
         help='Key to use in the checkpoint (example: "teacher")')
     parser.add_argument('--num_workers', default=10, type=int, help='Number of data loading workers per GPU.')
-    parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
-        distributed training; see https://pytorch.org/docs/stable/distributed.html""")
-    parser.add_argument("--local_rank", default=0, type=int, help="Please ignore and do not set this argument.")
+    # parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
+    #     distributed training; see https://pytorch.org/docs/stable/distributed.html""")
+    # parser.add_argument("--local_rank", default=0, type=int, help="Please ignore and do not set this argument.")
+
+    # Distributed training parameters
+    parser.add_argument('--debug_slurm', action='store_true')
+    parser.add_argument('--local_rank', default=-1, type=int)
+    parser.add_argument('--master_port', default=-1, type=int)
+    parser.add_argument('--dist-eval', action='store_true', default=False, help='Enabling distributed evaluation')
     args = parser.parse_args()
 
     utils.init_distributed_mode(args)
