@@ -558,7 +558,7 @@ class DataAugmentationDINO(object):
         flip_and_color_jitter = transforms.Compose([
             transforms.RandomHorizontalFlip(p=0.5),
             transforms.RandomApply(
-                [transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1)],
+                [transforms.ColorJitter(brightness=0.8, contrast=0.8, saturation=0.4, hue=0.2)],
                 p=0.8
             ),
             transforms.RandomGrayscale(p=0.2),
@@ -590,8 +590,8 @@ class DataAugmentationDINO(object):
         self.local_transfo = transforms.Compose([
             transforms.RandomResizedCrop(96, scale=local_crops_scale),
             flip_and_color_jitter,
-            utils.GaussianBlur(p=0.5),
-            smaller_rotation,
+            utils.GaussianBlur(p=0.5, radius_min=0.5, radius_max=4.0),
+            rotation,
             normalize,
         ])
 
