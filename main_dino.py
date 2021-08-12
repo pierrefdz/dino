@@ -121,6 +121,8 @@ def get_args_parser():
     parser.add_argument('--local_crops_scale', type=float, nargs='+', default=(0.05, 0.4),
         help="""Scale range of the cropped image before resizing, relatively to the origin image.
         Used for small local view cropping of multi-crop.""")
+    parser.add_argument('--global_crops_size', type=int, default=224)
+    parser.add_argument('--local_crops_size', type=int, default=96)
 
     # Rotation augmentation parameters
     parser.add_argument('--degrees', type=int, default=0)
@@ -160,6 +162,8 @@ def train_dino(args):
     transform = DataAugmentationDINO(
         args.global_crops_scale,
         args.local_crops_scale,
+        args.global_crops_size,
+        args.local_crops_size,
         args.local_crops_number,
         args.degrees
     )
@@ -552,9 +556,8 @@ class DINOLoss(nn.Module):
 
 
 class DataAugmentationDINO(object):
-    def __init__(self, global_crops_scale, local_crops_scale, local_crops_number, degrees):
+    def __init__(self, global_crops_scale, local_crops_scale, global_crops_size, local_crops_size, local_crops_number, degrees):
         rotation = transforms.RandomRotation(degrees=degrees)
-        smaller_rotation = transforms.RandomRotation(degrees=degrees/2)
         flip_and_color_jitter = transforms.Compose([
             transforms.RandomHorizontalFlip(p=0.5),
             transforms.RandomApply(
@@ -570,7 +573,7 @@ class DataAugmentationDINO(object):
 
         # first global crop
         self.global_transfo1 = transforms.Compose([
-            transforms.RandomResizedCrop(224, scale=global_crops_scale),
+            transforms.RandomResizedCrop(global_crops_size, scale=global_crops_scale),
             flip_and_color_jitter,
             utils.GaussianBlur(1.0),
             rotation,
@@ -578,7 +581,7 @@ class DataAugmentationDINO(object):
         ])
         # second global crop
         self.global_transfo2 = transforms.Compose([
-            transforms.RandomResizedCrop(224, scale=global_crops_scale),
+            transforms.RandomResizedCrop(global_crops_size, scale=global_crops_scale),
             flip_and_color_jitter,
             utils.GaussianBlur(0.1),
             utils.Solarization(0.2),
@@ -588,7 +591,7 @@ class DataAugmentationDINO(object):
         # transformation for the local small crops
         self.local_crops_number = local_crops_number
         self.local_transfo = transforms.Compose([
-            transforms.RandomResizedCrop(96, scale=local_crops_scale),
+            transforms.RandomResizedCrop(local_crops_size, scale=local_crops_scale),
             flip_and_color_jitter,
             utils.GaussianBlur(p=0.5, radius_min=0.5, radius_max=4.0),
             rotation,
