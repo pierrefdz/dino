@@ -21,7 +21,6 @@ import torch.distributed as dist
 import torch.backends.cudnn as cudnn
 from torchvision import datasets, models
 from torchvision import transforms as pth_transforms
-from torchvision import models as torchvision_models
 
 import utils
 import vision_transformer as vits
@@ -30,8 +29,8 @@ import vision_transformer as vits
 def extract_feature_pipeline(args):
     # ============ preparing data ... ============
     transform = pth_transforms.Compose([
-        pth_transforms.Resize(256, interpolation=3),
-        pth_transforms.CenterCrop(224),
+        pth_transforms.Resize(args.img_size+32, interpolation=3),
+        pth_transforms.CenterCrop(args.img_size),
         pth_transforms.ToTensor(),
         pth_transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
     ])
@@ -61,8 +60,9 @@ def extract_feature_pipeline(args):
         print(f"Model {args.arch} {args.patch_size}x{args.patch_size} built.")
     elif "xcit" in args.arch:
         model = torch.hub.load('facebookresearch/xcit', args.arch, num_classes=0)
-    elif args.arch in torchvision_models.__dict__.keys():
-        model = torchvision_models.__dict__[args.arch](num_classes=0)
+    elif args.arch in models.__dict__.keys():
+        model = models.__dict__[args.arch]()
+        model.fc = nn.Identity()
     else:
         print(f"Architecture {args.arch} non supported")
         sys.exit(1)
@@ -198,6 +198,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_cuda', default=True, type=utils.bool_flag,
         help="Should we store the features on GPU? We recommend setting this to False if you encounter OOM")
     parser.add_argument('--arch', default='vit_small', type=str, help='Architecture')
+    parser.add_argument('--img_size', default=224, type=int)
     parser.add_argument('--patch_size', default=16, type=int, help='Patch resolution of the model.')
     parser.add_argument("--checkpoint_key", default="teacher", type=str,
         help='Key to use in the checkpoint (example: "teacher")')
