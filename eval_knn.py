@@ -30,8 +30,8 @@ import vision_transformer as vits
 def extract_feature_pipeline(args):
     # ============ preparing data ... ============
     transform = pth_transforms.Compose([
-        pth_transforms.Resize(args.global_crops_size+32, interpolation=3),
-        pth_transforms.CenterCrop(args.global_crops_size),
+        pth_transforms.Resize(256, interpolation=3),
+        pth_transforms.CenterCrop(224),
         pth_transforms.ToTensor(),
         pth_transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
     ])
@@ -192,7 +192,6 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size_per_gpu', default=128, type=int, help='Per-GPU batch-size')
     parser.add_argument('--nb_knn', default=[10, 20, 100, 200], nargs='+', type=int,
         help='Number of NN to use. 20 is usually working the best.')
-    parser.add_argument('--global_crops_size', type=int, default=224)
     parser.add_argument('--temperature', default=0.07, type=float,
         help='Temperature used in the voting coefficient')
     parser.add_argument('--pretrained_weights', default='', type=str, help="Path to pretrained weights to evaluate.")
