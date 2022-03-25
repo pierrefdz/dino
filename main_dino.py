@@ -128,7 +128,7 @@ def get_args_parser():
     parser.add_argument('--degrees', type=int, default=0)
 
     # Misc
-    parser.add_argument('--data_path', default='/path/to/imagenet/train/', type=str,
+    parser.add_argument('--data_path', default='datasets01/imagenet_full_size/061417', type=str,
         help='Please specify path to the ImageNet training data.')
     parser.add_argument('--output_dir', default=".", type=str, help='Path to save logs and checkpoints.')
     parser.add_argument('--saveckp_freq', default=20, type=int, help='Save checkpoint every x epochs.')
@@ -190,17 +190,20 @@ def train_dino(args):
         )
         teacher = vits.__dict__[args.arch](patch_size=args.patch_size)
         embed_dim = student.embed_dim
-    # if the network is a XCiT
-    elif args.arch in torch.hub.list("facebookresearch/xcit"):
-        student = torch.hub.load('facebookresearch/xcit', args.arch,
-                                 pretrained=False, drop_path_rate=args.drop_path_rate)
-        teacher = torch.hub.load('facebookresearch/xcit', args.arch, pretrained=False)
-        embed_dim = student.embed_dim
+    # # if the network is a XCiT
+    # elif args.arch in torch.hub.list("facebookresearch/xcit"):
+    #     student = torch.hub.load('facebookresearch/xcit', args.arch,
+    #                              pretrained=False, drop_path_rate=args.drop_path_rate)
+    #     teacher = torch.hub.load('facebookresearch/xcit', args.arch, pretrained=False)
+    #     embed_dim = student.embed_dim
     # otherwise, we check if the architecture is in torchvision models
     elif args.arch in torchvision_models.__dict__.keys():
         student = torchvision_models.__dict__[args.arch]()
         teacher = torchvision_models.__dict__[args.arch]()
-        embed_dim = student.fc.weight.shape[1]
+        if args.arch.startswith("convnext") or args.arch.startswith("mobilenet"):       
+            embed_dim = student.classifier[-1].weight.shape[1]
+        else: #resnet
+            embed_dim = student.fc.weight.shape[1]
     else:
         print(f"Unknow architecture: {args.arch}")
 
