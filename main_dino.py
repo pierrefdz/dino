@@ -133,7 +133,7 @@ def get_args_parser():
     parser.add_argument('--degrees', type=int, default=0)
 
     # Misc
-    parser.add_argument('--data_path', default='datasets01/imagenet_full_size/061417', type=str,
+    parser.add_argument('--data_path', default='/datasets01/imagenet_full_size/061417', type=str,
         help='Please specify path to the ImageNet training data.')
     parser.add_argument('--output_dir', default=".", type=str, help='Path to save logs and checkpoints.')
     parser.add_argument('--saveckp_freq', default=20, type=int, help='Save checkpoint every x epochs.')
@@ -584,7 +584,7 @@ class RandomJPEG(augtrans.BaseTransform):
 class DataAugmentationDINO(object):
     def __init__(self, global_crops_scale, local_crops_scale, global_crops_size, local_crops_size, local_crops_number, degrees):
         rotation = transforms.RandomRotation(degrees=degrees)
-        overlay = imaugs.OneOf([imaugs.OverlayOntoScreenshot(), imaugs.OverlayEmoji(), imaugs.OverlayText()], p=0.3),
+        overlay = imaugs.OneOf([imaugs.OverlayOntoScreenshot(), imaugs.OverlayEmoji(), imaugs.OverlayText()], p=0.4)
         flip_and_color_jitter = transforms.Compose([
             transforms.RandomHorizontalFlip(p=0.5),
             transforms.RandomApply(
