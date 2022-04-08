@@ -584,7 +584,7 @@ class RandomJPEG(augtrans.BaseTransform):
 class DataAugmentationDINO(object):
     def __init__(self, global_crops_scale, local_crops_scale, global_crops_size, local_crops_size, local_crops_number, degrees):
         rotation = transforms.RandomRotation(degrees=degrees)
-        overlay = imaugs.OneOf([imaugs.OverlayOntoScreenshot(), imaugs.OverlayEmoji(), imaugs.OverlayText()], p=0.4)
+        # overlay = imaugs.OneOf([imaugs.OverlayOntoScreenshot(), imaugs.OverlayEmoji(), imaugs.OverlayText()], p=0.4)
         flip_and_color_jitter = transforms.Compose([
             transforms.RandomHorizontalFlip(p=0.5),
             transforms.RandomApply(
@@ -600,19 +600,19 @@ class DataAugmentationDINO(object):
 
         # first global crop
         self.global_transfo1 = transforms.Compose([
-            overlay,
-            RandomJPEG(low=80, high=100, p=0.5),
+            # overlay,
             transforms.RandomResizedCrop(global_crops_size, scale=global_crops_scale),
             flip_and_color_jitter,
             utils.GaussianBlur(1.0),
+            RandomJPEG(low=50, high=100, p=1.0),
             rotation,
             normalize,
         ])
         # second global crop
         self.global_transfo2 = transforms.Compose([
-            RandomJPEG(low=80, high=100, p=0.5),
             transforms.RandomResizedCrop(global_crops_size, scale=global_crops_scale),
             flip_and_color_jitter,
+            RandomJPEG(low=80, high=100, p=0.5),
             utils.GaussianBlur(0.1),
             utils.Solarization(0.2),
             rotation,
@@ -621,10 +621,12 @@ class DataAugmentationDINO(object):
         # transformation for the local small crops
         self.local_crops_number = local_crops_number
         self.local_transfo = transforms.Compose([
-            RandomJPEG(low=10, high=100, p=0.5),
             transforms.RandomResizedCrop(local_crops_size, scale=local_crops_scale),
             flip_and_color_jitter,
-            utils.GaussianBlur(p=0.5, radius_min=0.5, radius_max=4.0),
+            imaugs.OneOf([
+                utils.GaussianBlur(p=0.75, radius_min=0.5, radius_max=4.0),
+                RandomJPEG(low=10, high=80, p=0.75),
+            ]),
             rotation,
             normalize,
         ])
