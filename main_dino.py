@@ -22,7 +22,6 @@ import json
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
 import torch
 import torch.nn as nn
 import torch.distributed as dist
@@ -32,8 +31,7 @@ from torchvision import datasets, transforms
 from torchvision import models as torchvision_models
 
 import augly.image as imaugs
-import augly.image.functional as augfunc
-import augly.image.transforms as augtrans
+
 
 import utils
 import vision_transformer as vits
@@ -563,24 +561,6 @@ class DINOLoss(nn.Module):
         self.center = self.center * self.center_momentum + batch_center * (1 - self.center_momentum)
 
 
-class RandomJPEG(augtrans.BaseTransform):
-    def __init__(self, low: int = 10, high: int=100, p: float = 1.0):
-        """
-        Randomly jpeg compress the image.
-        Args:
-            low (int): lower bound of the compression rate
-            high (int): upper bound of the compression rate
-            p (float): probability of applying the transform
-        """
-        super().__init__(p)
-        self.low = low
-        self.high = high
-
-    def apply_transform(self, image: Image.Image, metadata = None, bboxes = None, bbox_format = None) -> Image.Image:
-        quality = int(random.random() * (self.high - self.low)) + self.low
-        return augfunc.encoding_quality(image, quality=quality, metadata=metadata, bboxes=bboxes,bbox_format=bbox_format)
-
-
 class DataAugmentationDINO(object):
     def __init__(self, global_crops_scale, local_crops_scale, global_crops_size, local_crops_size, local_crops_number, degrees):
         rotation = transforms.RandomRotation(degrees=degrees)
@@ -604,7 +584,7 @@ class DataAugmentationDINO(object):
             transforms.RandomResizedCrop(global_crops_size, scale=global_crops_scale),
             flip_and_color_jitter,
             utils.GaussianBlur(1.0),
-            RandomJPEG(low=50, high=100, p=1.0),
+            utils.RandomJPEG(low=50, high=100, p=1.0),
             rotation,
             normalize,
         ])
@@ -612,7 +592,7 @@ class DataAugmentationDINO(object):
         self.global_transfo2 = transforms.Compose([
             transforms.RandomResizedCrop(global_crops_size, scale=global_crops_scale),
             flip_and_color_jitter,
-            RandomJPEG(low=80, high=100, p=0.5),
+            utils.RandomJPEG(low=80, high=100, p=0.5),
             utils.GaussianBlur(0.1),
             utils.Solarization(0.2),
             rotation,
@@ -625,7 +605,7 @@ class DataAugmentationDINO(object):
             flip_and_color_jitter,
             imaugs.OneOf([
                 utils.GaussianBlur(p=0.75, radius_min=0.5, radius_max=4.0),
-                RandomJPEG(low=10, high=80, p=0.75),
+                utils.RandomJPEG(low=10, high=80, p=0.75),
             ]),
             rotation,
             normalize,

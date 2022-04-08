@@ -33,24 +33,44 @@ import numpy as np
 import torch
 from torch import nn
 import torch.distributed as dist
-from PIL import ImageFilter, ImageOps
+from PIL import ImageFilter, ImageOps, Image
+
+import augly.image.functional as augfunc
+import augly.image.transforms as augtrans
+
+class RandomJPEG(augtrans.BaseTransform):
+    def __init__(self, low: int = 10, high: int=100, p: float = 1.0):
+        """
+        Randomly jpeg compress the image.
+        Args:
+            low (int): lower bound of the compression rate
+            high (int): upper bound of the compression rate
+            p (float): probability of applying the transform
+        """
+        super().__init__(p)
+        self.low = low
+        self.high = high
+
+    def apply_transform(self, image: Image.Image, metadata = None, bboxes = None, bbox_format = None) -> Image.Image:
+        quality = int(random.random() * (self.high - self.low)) + self.low
+        return augfunc.encoding_quality(image, quality=quality, metadata=metadata, bboxes=bboxes,bbox_format=bbox_format)
 
 
-class GaussianBlur(object):
+class GaussianBlur(augtrans.BaseTransform):
     """
     Apply Gaussian Blur to the PIL image.
     """
-    def __init__(self, p=0.5, radius_min=0.1, radius_max=2.):
+    def __init__(self, radius_min=0.1, radius_max=2., p=0.5):
         self.prob = p
         self.radius_min = radius_min
         self.radius_max = radius_max
 
-    def __call__(self, img):
+    def __call__(self, image):
         do_it = random.random() <= self.prob
         if not do_it:
-            return img
+            return image
 
-        return img.filter(
+        return image.filter(
             ImageFilter.GaussianBlur(
                 radius=random.uniform(self.radius_min, self.radius_max)
             )
