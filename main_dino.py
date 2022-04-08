@@ -604,9 +604,9 @@ class DataAugmentationDINO(object):
             transforms.RandomResizedCrop(local_crops_size, scale=local_crops_scale),
             flip_and_color_jitter,
             imaugs.OneOf([
-                utils.GaussianBlur(p=0.75, radius_min=0.5, radius_max=4.0),
-                utils.RandomJPEG(low=10, high=80, p=0.75),
-            ]),
+                utils.GaussianBlur(radius_min=0.5, radius_max=4.0, p=1),
+                utils.RandomJPEG(low=10, high=50, p=1),
+            ], p=0.75 ),
             rotation,
             normalize,
         ])

@@ -61,12 +61,12 @@ class GaussianBlur(augtrans.BaseTransform):
     Apply Gaussian Blur to the PIL image.
     """
     def __init__(self, radius_min=0.1, radius_max=2., p=0.5):
-        self.prob = p
+        self.p = p
         self.radius_min = radius_min
         self.radius_max = radius_max
 
-    def __call__(self, image):
-        do_it = random.random() <= self.prob
+    def apply_transform(self, image: Image.Image, metadata = None, bboxes = None, bbox_format = None) -> Image.Image:
+        do_it = random.random() <= self.p
         if not do_it:
             return image
 
